@@ -110,6 +110,8 @@ public static class WallpaperService
             WritePolicyWallpaper(pinned, GetCurrentStyle());
             Apply(pinned);
         }
+
+        NotifyPolicyChanged();
     }
 
     public static void Unlock()
@@ -130,7 +132,17 @@ public static class WallpaperService
         var current = GetCurrentWallpaper();
         if (current is not null && File.Exists(current))
             Apply(current);
+
+        NotifyPolicyChanged();
     }
+
+    /// <summary>
+    /// Explorer and the Settings app cache policy restrictions; without this broadcast they keep
+    /// enforcing (or ignoring) the lock until the user signs out.
+    /// </summary>
+    private static void NotifyPolicyChanged() =>
+        NativeMethods.SendMessageTimeout(NativeMethods.HWND_BROADCAST, NativeMethods.WM_SETTINGCHANGE, UIntPtr.Zero,
+            "Policy", NativeMethods.SMTO_ABORTIFHUNG, 5000, out _);
 
     private static void WritePolicyWallpaper(string path, WallpaperStyle style)
     {

@@ -3,13 +3,15 @@ using System.Text;
 namespace ITMultiTool.Services;
 
 /// <summary>
-/// Blocks websites by pointing them at 0.0.0.0 / :: in the hosts file. Only lines inside
+/// Blocks websites by pointing them at 127.0.0.1 / ::1 in the hosts file. Only lines inside
 /// this tool's marked section are ever touched; the rest of the file is preserved as-is.
 /// </summary>
 public static class WebsiteBlockerService
 {
     private const string BeginMarker = "# >>> IT-MultiTool blocked sites >>>";
     private const string EndMarker = "# <<< IT-MultiTool blocked sites <<<";
+    private const string BlockAddressV4 = "127.0.0.1";
+    private const string BlockAddressV6 = "::1";
 
     public static string HostsPath { get; } = Path.Combine(Environment.SystemDirectory, "drivers", "etc", "hosts");
 
@@ -52,6 +54,33 @@ public static class WebsiteBlockerService
 
     public static void UnblockAll() => Save([]);
 
+    /// <summary>Re-applies the browser policies, e.g. after the block portal is turned on or off.</summary>
+    public static void ResyncBrowserPolicies()
+    {
+        var current = GetBlockedSites();
+        BrowserPolicyService.Sync(current, current);
+    }
+
+    /// <summary>
+    /// Brings entries made by older versions up to date: rewrites 0.0.0.0 / :: addresses and
+    /// adds the browser blocklist policies for sites that were only in the hosts file.
+    /// </summary>
+    public static void UpgradeEntries()
+    {
+        var (_, section, _) = ReadHosts();
+        var outdated = section.Any(line =>
+        {
+            var address = line.TrimStart().Split((char[])[' ', '\t'], 2)[0];
+            return address.Length > 0 && !address.StartsWith('#') && address != BlockAddressV4 && address != BlockAddressV6;
+        });
+
+        var current = GetBlockedSites();
+        if (outdated)
+            Save(current);
+        else if (current.Count > 0)
+            BrowserPolicyService.Sync(current, current);
+    }
+
     /// <summary>
     /// Turns user input such as "https://www.Example.com:443/path" into "example.com".
     /// </summary>
@@ -81,6 +110,7 @@ public static class WebsiteBlockerService
 
     private static void Save(IEnumerable<string> domains)
     {
+        var previous = GetBlockedSites();
         var (before, _, after) = ReadHosts();
 
         var lines = new List<string>(before);
@@ -97,8 +127,8 @@ public static class WebsiteBlockerService
             {
                 foreach (var host in new[] { domain, "www." + domain })
                 {
-                    lines.Add($"0.0.0.0 {host}");
-                    lines.Add($":: {host}");
+                    lines.Add($"{BlockAddressV4} {host}");
+                    lines.Add($"{BlockAddressV6} {host}");
                 }
             }
             lines.Add(EndMarker);
@@ -107,6 +137,7 @@ public static class WebsiteBlockerService
         lines.AddRange(after.SkipWhile(string.IsNullOrWhiteSpace));
         WriteHosts(lines);
         FlushDns();
+        BrowserPolicyService.Sync(previous, sorted);
     }
 
     private static (List<string> Before, List<string> Section, List<string> After) ReadHosts()
