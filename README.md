@@ -8,7 +8,6 @@ A small Windows Forms admin utility (C# / .NET 10) for common IT desk tasks.
 | | Lock / unlock the wallpaper | `NoChangingWallPaper` policy (HKLM + HKCU) and the HKCU `Policies\System\Wallpaper` value that pins the image |
 | **USB Storage** | Lock / unlock USB mass-storage devices | `USBSTOR` driver `Start` = 4 / 3, plus the *Removable Disks: Deny read/write/execute* policies |
 | **Website Blocker** | Block / unblock websites, typed in or from built-in non-work lists | Adds `127.0.0.1` and `::1` entries (domain + `www.`) to a marked section of the hosts file and flushes the DNS cache, and mirrors the list into the Edge / Chrome / Brave `URLBlocklist` and Firefox `WebsiteFilter` policies so browsers can't bypass it |
-
 | **Block Page** | Show the Philippines TRC Inc. block page when a blocked site is opened | See below |
 
 ### Block page portal
@@ -34,13 +33,36 @@ The first time IT MultiTool opens, it asks you to create a password (at least 8 
 symbol). After that, the password is required every time the app opens. After 5 wrong attempts the app closes. To change
 it, click **Change password** in the header.
 
-Only a salted PBKDF2-SHA256 hash (600,000 iterations) is stored, under `HKLM\SOFTWARE\ITMultiTool`. If the password is
-forgotten, a Windows administrator can reset it by deleting the `PasswordHash` value there. The next launch then asks
-for a new password:
+Only a salted PBKDF2-SHA256 hash (600,000 iterations) is stored, in `ITMultiTool.password.json` next to
+`ITMultiTool.exe`. Every PC that runs the app from the same folder uses the same password. The block page install copies
+the file to `C:\Program Files\ITMultiTool`, and changing the password updates that copy on the PC where you change it.
 
-```bash
-reg delete "HKLM\SOFTWARE\ITMultiTool" /v PasswordHash /f
-```
+If the password is forgotten, someone with write access to the folder can delete `ITMultiTool.password.json`. The next
+launch then asks for a new password. If the file exists but can't be read (network drop, damaged file), the app refuses
+to open instead of offering to create a new password.
+
+## Running from a shared folder
+
+1. Publish a self-contained single file, so the PCs don't need the .NET runtime installed:
+
+   ```bash
+   dotnet publish src/ITMultiTool -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o publish
+   ```
+
+   This produces a single `ITMultiTool.exe` of about 50 MB.
+
+2. Copy `publish\ITMultiTool.exe` to the share, for example `\\server\IT\ITMultiTool\`.
+3. Set the share permissions:
+   - **IT staff:** Modify. Needed to create or change the password and to update the app.
+   - **Everyone else:** no access, or Read only. **Never** give other users write access: anyone who can write to the
+     folder can delete the password file or replace the program.
+4. On each PC, open the app with its UNC path (`\\server\IT\ITMultiTool\ITMultiTool.exe`) and choose
+   **Run as administrator**. Don't use a mapped drive letter: elevated programs can't see drives mapped in the normal
+   session.
+5. The first person to open it creates the password, and every PC uses it from then on.
+
+Settings the app changes (wallpaper, USB, hosts file, browser policies, block page) are still made **on the PC where it
+runs**. Open the app on each PC you want to manage.
 
 ## Requirements
 
@@ -54,11 +76,7 @@ reg delete "HKLM\SOFTWARE\ITMultiTool" /v PasswordHash /f
 dotnet build ITMultiTool.slnx -c Release
 ```
 
-Single-file, self-contained executable:
-
-```bash
-dotnet publish src/ITMultiTool -c Release -r win-x64 --self-contained -p:PublishSingleFile=true
-```
+For the shared-folder build, see *Running from a shared folder* above.
 
 ## Notes
 

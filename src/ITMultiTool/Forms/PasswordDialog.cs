@@ -169,7 +169,12 @@ public sealed class PasswordDialog : Form
         }
         catch (UnauthorizedAccessException)
         {
-            ShowError("Access denied. Run IT MultiTool as administrator.", _new);
+            ShowError($"Access denied writing {PasswordService.FilePath}. You need write access to the IT MultiTool folder.", _new);
+            return;
+        }
+        catch (IOException ex)
+        {
+            ShowError("Could not save the password: " + ex.Message, _new);
             return;
         }
 
@@ -180,9 +185,22 @@ public sealed class PasswordDialog : Form
 
     private bool CheckCurrentPassword()
     {
+        bool valid;
         UseWaitCursor = true;
-        var valid = PasswordService.Verify(_current.Text);
-        UseWaitCursor = false;
+        try
+        {
+            valid = PasswordService.Verify(_current.Text);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            ShowError("Cannot read the password file: " + ex.Message, _current);
+            return false;
+        }
+        finally
+        {
+            UseWaitCursor = false;
+        }
+
         if (valid)
             return true;
 

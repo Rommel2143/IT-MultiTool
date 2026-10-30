@@ -1,42 +1,45 @@
 using System.Security.Cryptography;
 using System.Text;
-using Microsoft.Win32;
+using System.Text.Json;
 
 namespace ITMultiTool.Services;
 
 /// <summary>
-/// The IT MultiTool administrator password. Only a salted PBKDF2 hash is stored, under
-/// HKLM\SOFTWARE\ITMultiTool, which standard users can read but not change.
+/// The IT MultiTool administrator password. Only a salted PBKDF2 hash is stored, in
+/// <see cref="FileName"/> next to the app, so every PC that runs the app from the same
+/// shared folder uses the same password.
 /// </summary>
 public static class PasswordService
 {
     public const int MinimumLength = 8;
-
-    private const string SettingsKey = @"SOFTWARE\ITMultiTool";
-    private const string HashValue = "PasswordHash";
-    private const string SaltValue = "PasswordSalt";
-    private const string IterationsValue = "PasswordIterations";
+    public const string FileName = "ITMultiTool.password.json";
 
     private const int Iterations = 600_000;
     private const int SaltBytes = 16;
     private const int HashBytes = 32;
 
-    public static bool HasPassword()
-    {
-        using var key = OpenSettings(writable: false);
-        return key?.GetValue(HashValue) is byte[] { Length: > 0 };
-    }
+    private sealed record PasswordFile(int Iterations, string Salt, string Hash);
+
+    public static string FilePath { get; } = Path.Combine(AppContext.BaseDirectory, FileName);
+
+    public static bool HasPassword() => Read() is not null;
 
     public static bool Verify(string password)
     {
-        using var key = OpenSettings(writable: false);
-        if (key?.GetValue(HashValue) is not byte[] expected ||
-            key.GetValue(SaltValue) is not byte[] salt ||
-            key.GetValue(IterationsValue) is not int iterations)
+        var stored = Read();
+        if (stored is null)
             return false;
 
-        var actual = Hash(password, salt, iterations);
-        return CryptographicOperations.FixedTimeEquals(actual, expected);
+        try
+        {
+            var expected = Convert.FromBase64String(stored.Hash);
+            var actual = Hash(password, Convert.FromBase64String(stored.Salt), stored.Iterations);
+            return CryptographicOperations.FixedTimeEquals(actual, expected);
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
     }
 
     public static void SetPassword(string password)
@@ -46,13 +49,20 @@ public static class PasswordService
             throw new ArgumentException(problem);
 
         var salt = RandomNumberGenerator.GetBytes(SaltBytes);
-        var hash = Hash(password, salt, Iterations);
+        var stored = new PasswordFile(Iterations, Convert.ToBase64String(salt), Convert.ToBase64String(Hash(password, salt, Iterations)));
+        var json = JsonSerializer.Serialize(stored, new JsonSerializerOptions { WriteIndented = true });
 
-        using var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
-        using var key = hklm.CreateSubKey(SettingsKey);
-        key.SetValue(SaltValue, salt, RegistryValueKind.Binary);
-        key.SetValue(IterationsValue, Iterations, RegistryValueKind.DWord);
-        key.SetValue(HashValue, hash, RegistryValueKind.Binary);
+        WriteAtomically(FilePath, json);
+
+        // Keep the block page's local copy of the app protected by the same password.
+        var installedCopy = Path.Combine(PortalService.InstallDirectory, FileName);
+        if (!string.Equals(Path.GetFullPath(installedCopy), Path.GetFullPath(FilePath), StringComparison.OrdinalIgnoreCase)
+            && Directory.Exists(PortalService.InstallDirectory))
+        {
+            try { WriteAtomically(installedCopy, json); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
     }
 
     /// <summary>Returns why a new password is not acceptable, or null if it is.</summary>
@@ -65,12 +75,39 @@ public static class PasswordService
         return null;
     }
 
+    /// <summary>
+    /// Returns null only when no password has been set. A file that exists but can't be read
+    /// (network drop, damaged file) throws instead, so it never looks like a first run that
+    /// would let someone create a new password.
+    /// </summary>
+    private static PasswordFile? Read()
+    {
+        if (!File.Exists(FilePath))
+            return null;
+
+        PasswordFile? stored;
+        try
+        {
+            stored = JsonSerializer.Deserialize<PasswordFile>(File.ReadAllText(FilePath));
+        }
+        catch (JsonException)
+        {
+            stored = null;
+        }
+
+        return stored is { Iterations: > 0, Salt.Length: > 0, Hash.Length: > 0 }
+            ? stored
+            : throw new InvalidDataException($"The password file is damaged: {FilePath}");
+    }
+
+    // Write to a temp file and swap it in, so a PC reading the share never sees a half-written file.
+    private static void WriteAtomically(string path, string contents)
+    {
+        var temp = path + ".tmp";
+        File.WriteAllText(temp, contents, new UTF8Encoding(false));
+        File.Move(temp, path, overwrite: true);
+    }
+
     private static byte[] Hash(string password, byte[] salt, int iterations) =>
         Rfc2898DeriveBytes.Pbkdf2(Encoding.UTF8.GetBytes(password), salt, iterations, HashAlgorithmName.SHA256, HashBytes);
-
-    private static RegistryKey? OpenSettings(bool writable)
-    {
-        using var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
-        return hklm.OpenSubKey(SettingsKey, writable);
-    }
 }

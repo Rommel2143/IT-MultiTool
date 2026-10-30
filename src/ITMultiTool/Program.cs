@@ -18,7 +18,17 @@ static class Program
 
         ApplicationConfiguration.Initialize();
 
-        var mode = PasswordService.HasPassword() ? PasswordDialogMode.Login : PasswordDialogMode.Setup;
+        PasswordDialogMode mode;
+        try
+        {
+            mode = PasswordService.HasPassword() ? PasswordDialogMode.Login : PasswordDialogMode.Setup;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            MessageBox.Show($"Cannot read the password file.\n\n{ex.Message}", "IT MultiTool", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return 1;
+        }
+
         using (var dialog = new PasswordDialog(mode))
         {
             if (dialog.ShowDialog() != DialogResult.OK)
